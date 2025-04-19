@@ -1,0 +1,112 @@
+version: "3.8"
+
+services:
+  postgres-auth:
+    image: postgres:15
+    container_name: postgres-auth
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: users_db
+    ports:
+      - 5433:5432
+    volumes:
+      - pgdata_auth:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  postgres-user:
+    image: postgres:15
+    container_name: postgres-user
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: users_db
+    ports:
+      - 5435:5432
+    volumes:
+      - pgdata_user:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  supertokens-service:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql
+    container_name: supertokens-service
+    depends_on:
+      - postgres-auth
+    ports:
+      - 3567:3567
+    environment:
+      POSTGRESQL_CONNECTION_URI: ${SUPERTOKENS_DATABASE_URL}
+      POSTGRESQL_TABLE_NAMES_PREFIX: "supertokens"
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  user-service:
+    image: quay.io/novelnest/user-service:latest
+    # build: .
+    container_name: user-service
+    depends_on:
+      - postgres-auth
+      - postgres-user
+      - supertokens-service
+    ports:
+      - "5000:5000"
+    environment:
+      USERSERVICE_API_URL: ${USERSERVICE_API_URL}
+      VITE_APP_UI_URL: ${VITE_APP_UI_URL}
+      USER_DATABASE_URL: ${USER_DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      QUEUE_NAME: ${QUEUE_NAME}
+      PORT: ${PORT}
+      SUPERTOKENS_DATABASE_URL: ${SUPERTOKENS_DATABASE_URL}
+      SUPERTOKENS_CORE_URL: ${SUPERTOKENS_CORE_URL}
+      VITE_APP_PORT: ${VITE_APP_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+    volumes:
+      - ./prisma:/app/prisma
+    networks:
+      - app_network
+
+  supertokens-admin-create:
+    image: curlimages/curl:latest
+    container_name: supertokens-admin-create
+    depends_on:
+      - supertokens-service
+      - user-service
+    environment:
+      SUPERTOKENS_CORE_URL: ${SUPERTOKENS_CORE_URL}
+      SUPERTOKENS_DASHBOARD_ADMIN_EMAIL: ${SUPERTOKENS_DASHBOARD_ADMIN_EMAIL}
+      SUPERTOKENS_DASHBOARD_ADMIN_PASSWORD: ${SUPERTOKENS_DASHBOARD_ADMIN_PASSWORD}
+    entrypoint: [ "/bin/sh", "-c" ]
+    command: |
+      echo "🔧 Starting supertokens-admin-create to create admin user..." && \
+      until curl -s "$${SUPERTOKENS_CORE_URL}/hello" >/dev/null; do
+        echo "⏳ Waiting for SuperTokens..." && sleep 2;
+      done && \
+      echo "✅ SuperTokens is ready. Creating admin user..." && \
+      RESPONSE=$$(curl --silent --write-out 'HTTPSTATUS:%{http_code}' --location --request POST "$${SUPERTOKENS_CORE_URL}/recipe/dashboard/user" \
+        --header "rid: dashboard" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"email\": \"$${SUPERTOKENS_DASHBOARD_ADMIN_EMAIL}\",\"password\": \"$${SUPERTOKENS_DASHBOARD_ADMIN_PASSWORD}\"}") && \
+      BODY=$$(echo "$$RESPONSE" | sed -e 's/HTTPSTATUS\:.*//g') && \
+      STATUS=$$(echo "$$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://') && \
+      if [ "$$STATUS" -eq 200 ]; then \
+        if echo "$$BODY" | grep -q "EMAIL_ALREADY_EXISTS_ERROR"; then \
+          echo "ℹ️  Admin user already exists. Skipping creation."; \
+        else \
+          echo "✅ Admin user created successfully."; \
+        fi; \
+      elif echo "$$BODY" | grep -q "PASSWORD_WEAK_ERROR"; then \
+        MESSAGE=$$(echo "$$BODY" | sed -n 's/.*\"message\":\"\([^\"]*\)\".*/\1/p'); \
+        echo "⚠️  Password is too weak. Reason: $$MESSAGE"; \
+        exit 1; \
+      else \
+        echo "❌ Failed to create admin user. Response:" && echo "$$BODY"; \
+        exit 1; \
+      fi
+    networks:
+      - app_network

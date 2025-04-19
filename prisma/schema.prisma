@@ -1,0 +1,32 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("USER_DATABASE_URL")
+}
+
+model Purchases {
+  id           String      @id @default(uuid())
+  orderId      String      @map("order_id")
+  customerId   String      @map("customer_id")
+  bookId       String      @map("book_id")
+  bookTitle    String      @map("book_title")
+  bookAuthor   String      @map("book_author")
+  bookGenre    String      @map("book_genre")
+  purchaseDate DateTime    @map("purchase_date")
+  orderStatus  OrderStatus @map("order_status")
+}
+
+enum OrderStatus {
+  Pending
+  Approved
+  Rejected
+}
